@@ -127,17 +127,18 @@ node['mysql']['server']['packages'].each do |package_name|
   end
 end
 
-unless platform?(%w{mac_os_x})
+if platform?(%w{mac_os_x})
+  execute "mysql-install-db" do
+    command "mysql_install_db --verbose --user=`whoami` --basedir=\"$(brew --prefix mysql)\" --datadir=#{node['mysql']['data_dir']} --tmpdir=/tmp"
+    environment('TMPDIR' => nil)
+    action :run
+    creates "#{node['mysql']['data_dir']}/mysql"
+  end
+else
   execute 'mysql-install-db' do
     command "mysql_install_db"
     action :run
-
-    not_if { File.exists?(node['mysql']['data_dir'] + '/mysql/user.fym') }
-  end
-
-  execute 'chown db' do
-    command 'chown -R mysql /db/'
-    action :run
+    not_if { File.exists?(node['mysql']['data_dir'] + '/mysql/user.frm') }
   end
 
   service "mysql" do
@@ -148,8 +149,52 @@ unless platform?(%w{mac_os_x})
       start_command "start mysql"
     end
     supports :status => true, :restart => true, :reload => true
-    action :nothing
+    action :start
   end
+end
+
+# set the root password on platforms
+# that don't support pre-seeding
+unless platform?(%w{debian ubuntu})
+
+  execute "assign-root-password" do
+    command "\"#{node['mysql']['mysqladmin_bin']}\" -u root password \"#{node['mysql']['server_root_password']}\""
+    action :run
+    only_if "\"#{node['mysql']['mysql_bin']}\" -u root -e 'show databases;'"
+  end
+
+end
+
+unless platform?(%w{mac_os_x})
+  grants_path = node['mysql']['grants_path']
+
+  begin
+    t = resources("template[#{grants_path}]")
+  rescue
+    Chef::Log.info("Could not find previously defined grants.sql resource")
+    t = template grants_path do
+      source "grants.sql.erb"
+      owner "root" unless platform? 'windows'
+      group node['mysql']['root_group'] unless platform? 'windows'
+      mode "0600"
+      action :create
+    end
+  end
+
+  if platform? 'windows'
+    windows_batch "mysql-install-privileges" do
+      command "\"#{node['mysql']['mysql_bin']}\" -u root #{node['mysql']['server_root_password'].empty? ? '' : '-p' }\"#{node['mysql']['server_root_password']}\" < \"#{grants_path}\""
+      action :nothing
+      subscribes :run, resources("template[#{grants_path}]"), :immediately
+    end
+  else
+    execute "mysql-install-privileges" do
+      command %Q["#{node['mysql']['mysql_bin']}" -u root #{node['mysql']['server_root_password'].empty? ? '' : '-p' }"#{node['mysql']['server_root_password']}" < "#{grants_path}"]
+      action :nothing
+      subscribes :run, resources("template[#{grants_path}]"), :immediately
+    end
+  end
+
 
   template "#{node['mysql']['conf_dir']}/my.cnf" do
     source "my.cnf.erb"
@@ -191,55 +236,3 @@ unless Chef::Config[:solo]
   end
 end
 
-# set the root password on platforms
-# that don't support pre-seeding
-unless platform?(%w{debian ubuntu})
-
-  execute "assign-root-password" do
-    command "\"#{node['mysql']['mysqladmin_bin']}\" -u root password \"#{node['mysql']['server_root_password']}\""
-    action :run
-    only_if "\"#{node['mysql']['mysql_bin']}\" -u root -e 'show databases;'"
-  end
-
-end
-
-# Homebrew has its own way to do databases
-if platform?(%w{mac_os_x})
-
-  execute "mysql-install-db" do
-    command "mysql_install_db --verbose --user=`whoami` --basedir=\"$(brew --prefix mysql)\" --datadir=#{node['mysql']['data_dir']} --tmpdir=/tmp"
-    environment('TMPDIR' => nil)
-    action :run
-    creates "#{node['mysql']['data_dir']}/mysql"
-  end
-
-else
-  grants_path = node['mysql']['grants_path']
-
-  begin
-    t = resources("template[#{grants_path}]")
-  rescue
-    Chef::Log.info("Could not find previously defined grants.sql resource")
-    t = template grants_path do
-      source "grants.sql.erb"
-      owner "root" unless platform? 'windows'
-      group node['mysql']['root_group'] unless platform? 'windows'
-      mode "0600"
-      action :create
-    end
-  end
-
-  if platform? 'windows'
-    windows_batch "mysql-install-privileges" do
-      command "\"#{node['mysql']['mysql_bin']}\" -u root #{node['mysql']['server_root_password'].empty? ? '' : '-p' }\"#{node['mysql']['server_root_password']}\" < \"#{grants_path}\""
-      action :nothing
-      subscribes :run, resources("template[#{grants_path}]"), :immediately
-    end
-  else
-    execute "mysql-install-privileges" do
-      command "\"#{node['mysql']['mysql_bin']}\" -u root #{node['mysql']['server_root_password'].empty? ? '' : '-p' }\"#{node['mysql']['server_root_password']}\" < \"#{grants_path}\""
-      action :nothing
-      subscribes :run, resources("template[#{grants_path}]"), :immediately
-    end
-  end
-end

@@ -148,7 +148,7 @@ else
       provider Chef::Provider::Service::Upstart
     end
     supports :status => true, :restart => true, :reload => true
-    action [:start, :enabled]
+    action [:start, :enable]
   end
 end
 

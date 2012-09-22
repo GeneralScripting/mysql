@@ -28,6 +28,18 @@ node.set_unless['mysql']['server_repl_password']   = secure_password
 
 if platform?(%w{debian ubuntu})
 
+  group "mysql" do
+    system true
+  end
+
+  user "mysql" do
+    comment "MySQL user"
+    gid "mysql"
+    home node['mysql']['data_dir']
+    shell "/bin/false"
+    system true
+  end
+
   directory "/var/cache/local/preseeding" do
     owner "root"
     group node['mysql']['root_group']

@@ -74,13 +74,13 @@ if platform? 'windows'
   end
 end
 
-node['mysql']['server']['packages'].each do |package_name|
-  package package_name do
-    action :install
-  end
-end
-
 unless platform?(%w{mac_os_x})
+  directory File.dirname(node['mysql']['pid_file']) do
+    owner "mysql" unless platform? 'windows'
+    group "mysql" unless platform? 'windows'
+    action :create
+    recursive true
+  end
 
   directory node['mysql']['confd_dir'] do
     owner "mysql" unless platform? 'windows'
@@ -89,28 +89,25 @@ unless platform?(%w{mac_os_x})
     recursive true
   end
 
-  if platform? 'windows'
-    require 'win32/service'
-
-    windows_path node['mysql']['bin_dir'] do
-      action :add
-    end
-
-    windows_batch "install mysql service" do
-      command "\"#{node['mysql']['bin_dir']}\\mysqld.exe\" --install #{node['mysql']['service_name']}"
-      not_if { Win32::Service.exists?(node['mysql']['service_name']) }
-    end
+  directory node['mysql']['confd_dir'] do
+    owner "mysql" unless platform? 'windows'
+    group "mysql" unless platform? 'windows'
+    action :create
+    recursive true
   end
 
-  service "mysql" do
-    service_name node['mysql']['service_name']
-    if node['mysql']['use_upstart']
-      restart_command "restart mysql"
-      stop_command "stop mysql"
-      start_command "start mysql"
-    end
-    supports :status => true, :restart => true, :reload => true
-    action :enable
+  directory node['mysql']['log_dir'] do
+    owner "mysql" unless platform? 'windows'
+    group "mysql" unless platform? 'windows'
+    action :create
+    recursive true
+  end
+
+  directory node['mysql']['data_dir'] do
+    owner "mysql" unless platform? 'windows'
+    group "mysql" unless platform? 'windows'
+    action :create
+    recursive true
   end
 
   skip_federated = case node['platform']
@@ -122,29 +119,36 @@ unless platform?(%w{mac_os_x})
                      false
                    end
 
-  template "#{node['mysql']['conf_dir']}/my.cnf" do
-    source "my.cnf.erb"
-    owner "root" unless platform? 'windows'
-    group node['mysql']['root_group'] unless platform? 'windows'
-    mode "0644"
-    case node['mysql']['reload_action']
-    when 'restart'
-      notifies :restart, resources(:service => "mysql"), :immediately
-    when 'reload'
-      notifies :reload, resources(:service => "mysql"), :immediately
-    else
-      Chef::Log.info "my.cnf updated but mysql.reload_action is #{node['mysql']['reload_action']}. No action taken."
-    end
-    variables :skip_federated => skip_federated
+end
+
+node['mysql']['server']['packages'].each do |package_name|
+  package package_name do
+    action :install
   end
 end
 
-unless Chef::Config[:solo]
-  ruby_block "save node data" do
-    block do
-      node.save
+# Homebrew has its own way to do databases
+if platform?(%w{mac_os_x})
+  execute "mysql-install-db" do
+    command "mysql_install_db --verbose --user=`whoami` --basedir=\"$(brew --prefix mysql)\" --datadir=#{node['mysql']['data_dir']} --tmpdir=/tmp"
+    environment('TMPDIR' => nil)
+    action :run
+    creates "#{node['mysql']['data_dir']}/mysql"
+  end
+else
+  execute 'mysql-install-db' do
+    command "mysql_install_db"
+    action :run
+    not_if { File.exists?(node['mysql']['data_dir'] + '/mysql/user.frm') }
+  end
+
+  service "mysql" do
+    service_name node['mysql']['service_name']
+    if node['mysql']['use_upstart']
+      provider Chef::Provider::Service::Upstart
     end
-    action :create
+    supports :status => true, :restart => true, :reload => true
+    action [:start, :enabled]
   end
 end
 
@@ -156,18 +160,9 @@ execute "assign-root-password" do
   only_if "\"#{node['mysql']['mysql_bin']}\" -u root -e 'show databases;'"
 end
 
-# Homebrew has its own way to do databases
-if platform?(%w{mac_os_x})
-
-  execute "mysql-install-db" do
-    command "mysql_install_db --verbose --user=`whoami` --basedir=\"$(brew --prefix mysql)\" --datadir=#{node['mysql']['data_dir']} --tmpdir=/tmp"
-    environment('TMPDIR' => nil)
-    action :run
-    creates "#{node['mysql']['data_dir']}/mysql"
-  end
-
-else
+unless platform?(%w{mac_os_x})
   grants_path = node['mysql']['grants_path']
+
   begin
     t = resources("template[#{grants_path}]")
   rescue
@@ -189,9 +184,50 @@ else
     end
   else
     execute "mysql-install-privileges" do
-      command "\"#{node['mysql']['mysql_bin']}\" -u root #{node['mysql']['server_root_password'].empty? ? '' : '-p' }\"#{node['mysql']['server_root_password']}\" < \"#{grants_path}\""
+      command %Q["#{node['mysql']['mysql_bin']}" -u root #{node['mysql']['server_root_password'].empty? ? '' : '-p' }"#{node['mysql']['server_root_password']}" < "#{grants_path}"]
       action :nothing
       subscribes :run, resources("template[#{grants_path}]"), :immediately
     end
   end
+
+
+  template "#{node['mysql']['conf_dir']}/my.cnf" do
+    source "my.cnf.erb"
+    owner "root" unless platform? 'windows'
+    group node['mysql']['root_group'] unless platform? 'windows'
+    mode "0644"
+    case node['mysql']['reload_action']
+    when 'restart'
+      notifies :restart, resources(:service => "mysql"), :immediately
+    when 'reload'
+      notifies :reload, resources(:service => "mysql"), :immediately
+    else
+      Chef::Log.info "my.cnf updated but mysql.reload_action is #{node['mysql']['reload_action']}. No action taken."
+    end
+    variables :skip_federated => skip_federated
+  end
+
+  if platform? 'windows'
+    require 'win32/service'
+
+    windows_path node['mysql']['bin_dir'] do
+      action :add
+    end
+
+    windows_batch "install mysql service" do
+      command "\"#{node['mysql']['bin_dir']}\\mysqld.exe\" --install #{node['mysql']['service_name']}"
+      not_if { Win32::Service.exists?(node['mysql']['service_name']) }
+    end
+  end
+
 end
+
+unless Chef::Config[:solo]
+  ruby_block "save node data" do
+    block do
+      node.save
+    end
+    action :create
+  end
+end
+

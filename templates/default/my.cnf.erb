@@ -133,7 +133,7 @@ read_only = <%= node['mysql']['read_only'] %>
 
 #
 # Here you can see queries with especially long duration
-<%- if node['mysql']['version'].to_f >= 5.5 %>
+<%- if node['mysql']['version'].to_f >= 5.1 %>
 slow_query_log          = <%= node['mysql']['tunable']['slow_query_log'] %>
 <% else %>
 log_slow_queries        = <%= node['mysql']['tunable']['slow_query_log'] %>

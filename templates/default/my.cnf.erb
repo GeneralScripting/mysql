@@ -24,6 +24,8 @@
 port            = <%= node['mysql']['port'] %>
 socket          = <%= node['mysql']['socket'] %>
 
+default-character-set = <%= node['mysql']['tunable']['character-set-server'] %>
+
 # Here is entries for some specific programs
 # The following values assume you have at least 32M ram
 
